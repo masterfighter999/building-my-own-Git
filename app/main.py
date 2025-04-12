@@ -60,6 +60,31 @@ def main():
                 f.write(zlib.compress(store))
             # Print the SHA-1 hash of the blob
             print(sha1_hash)
+
+        elif command == "ls-tree":
+            param, tree_hash = sys.argv[2], sys.argv[3]
+            if param == "--name-only":
+                with open(f".git/objects/{tree_hash[:2]}/{tree_hash[2:]}", "rb") as f:
+                    data = zlib.decompress(f.read())
+                    _, body = data.split(b'\x00', 1)
+
+                    i = 0
+                    while i < len(body):
+                    # Read mode and filename (till \0)
+                        space_index = body.index(b' ', i)
+                        null_index = body.index(b'\x00', space_index)
+                        mode = body[i:space_index]
+                        name = body[space_index + 1:null_index]
+                        i = null_index + 1
+
+                    # Read 20-byte SHA-1 hash
+                        sha = body[i:i + 20]
+                        i += 20
+
+                    # Just print the name as per --name-only
+                        print(name.decode())
+
+
         else:
             # Raise an error for unknown options
             raise RuntimeError(f"Unknown option for hash-object: #{sys.argv[2]}")  # More specific error
