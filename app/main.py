@@ -61,33 +61,52 @@ def main():
             # Print the SHA-1 hash of the blob
             print(sha1_hash)
 
-        elif command == "ls-tree":
-            param, tree_hash = sys.argv[2], sys.argv[3]
-            if param == "--name-only":
-                with open(f".git/objects/{tree_hash[:2]}/{tree_hash[2:]}", "rb") as f:
-                    data = zlib.decompress(f.read())
-                    _, body = data.split(b'\x00', 1)
-
-                    i = 0
-                    while i < len(body):
-                    # Read mode and filename (till \0)
-                        space_index = body.index(b' ', i)
-                        null_index = body.index(b'\x00', space_index)
-                        mode = body[i:space_index]
-                        name = body[space_index + 1:null_index]
-                        i = null_index + 1
-
-                    # Read 20-byte SHA-1 hash
-                        sha = body[i:i + 20]
-                        i += 20
-
-                    # Just print the name as per --name-only
-                        print(name.decode())
-
-
         else:
             # Raise an error for unknown options
             raise RuntimeError(f"Unknown option for hash-object: #{sys.argv[2]}")  # More specific error
+
+    elif command == "ls-tree":
+        # Check if we have at least 2 arguments
+        if len(sys.argv) < 3:
+            raise RuntimeError("ls-tree requires a tree hash")
+            
+        # Get parameters and tree hash
+        param = sys.argv[2]
+        tree_hash = sys.argv[3] if param.startswith('--') else sys.argv[2]
+        
+        # Read and decompress the tree object
+        with open(f".git/objects/{tree_hash[:2]}/{tree_hash[2:]}", "rb") as f:
+            data = zlib.decompress(f.read())
+            
+        # Split header and content
+        header, content = data.split(b'\x00', 1)
+        
+        # Verify this is a tree object
+        if not header.startswith(b'tree'):
+            raise RuntimeError(f"Object {tree_hash} is not a tree")
+            
+        # Parse entries based on format
+        i = 0
+        while i < len(content):
+            # Find the space that separates mode from name
+            space_index = content.index(b' ', i)
+            # Find the null byte that separates name from SHA
+            null_index = content.index(b'\x00', space_index)
+            
+            # Extract mode, name and SHA
+            mode = content[i:space_index].decode()
+            name = content[space_index + 1:null_index].decode()
+            sha = content[null_index + 1:null_index + 21].hex()
+            
+            # Move index to next entry
+            i = null_index + 21
+            
+            if param == "--name-only":
+                # Print only the filename
+                print(name)
+            else:
+                # Print full entry: mode type hash name
+                print(f"{mode} blob {sha}\t{name}")
 
     # Handle unknown commands
     else:
