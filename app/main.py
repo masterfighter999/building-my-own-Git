@@ -26,36 +26,38 @@ def main():
     elif command == "cat-file" and sys.argv[2] == "-p":
         # Get the object name (SHA-1 hash) from the arguments
         obj_name = sys.argv[3]
-        # Open the corresponding object file in the .git/objects directory
+        # Git objects are stored in directories named with first 2 chars of hash
+        # Remaining hash chars form the filename
         with open(f".git/objects/{obj_name[:2]}/{obj_name[2:]}", "rb") as f:
-            # Decompress the file content
+            # Git objects are stored compressed with zlib
             raw = zlib.decompress(f.read())
-            # Split the content into header and actual content
+            # Object format: <type> <size>\0<content>
+            # Split at first null byte to separate header from content
             header, content = raw.split(b"\0", maxsplit=1)
-            # Print the content as a UTF-8 string
+            # Display the actual content (works for both blob and tree)
             print(content.decode(encoding="utf-8"), end="")
 
     # Handle the "hash-object" command with the "-w" flag to create a blob
-    elif command == "hash-object":  # Changed this line
+    elif command == "hash-object":
         if sys.argv[2] == "-w":
             # Get the file path from the arguments
             file_path = sys.argv[3]
-            # Read the file content
+            # Read file in binary mode to handle all file types
             with open(file_path, "rb") as f:
                 content = f.read()
-            # Create the blob header in the format "blob <size>\0"
+            # Git blob format: "blob <size>\0<content>"
+            # The header describes the type and size of content
             header = f"blob {len(content)}\0".encode()
-            # Combine the header and content
             store = header + content
-            # Compute the SHA-1 hash of the blob
+            # SHA-1 hash is computed on the complete object (header + content)
             sha1_hash = hashlib.sha1(store).hexdigest()
-            # Determine the directory and file path for storing the blob
+            # Store object in .git/objects/<first-2-chars>/<remaining-38-chars>
             obj_dir = f".git/objects/{sha1_hash[:2]}"
             obj_path = f"{obj_dir}/{sha1_hash[2:]}"
             # Create the directory if it doesn't exist
             if not os.path.exists(obj_dir):
                 os.makedirs(obj_dir)
-            # Write the compressed blob to the file
+            # Compress the object before storing
             with open(obj_path, "wb") as f:
                 f.write(zlib.compress(store))
             # Print the SHA-1 hash of the blob
@@ -107,6 +109,60 @@ def main():
             else:
                 # Print full entry: mode type hash name
                 print(f"{mode} blob {sha}\t{name}")
+
+    elif command == "write-tree":
+        # Tree objects represent directory structure
+        tree_entries = []
+        
+        for entry in os.listdir("."):
+            if entry == ".git":
+                continue
+            
+            if os.path.isfile(entry):
+                # First create blob objects for all files
+                with open(entry, "rb") as f:
+                    content = f.read()
+                
+                # Create and store blob object
+                header = f"blob {len(content)}\0".encode()
+                store = header + content
+                sha1_hash = hashlib.sha1(store).hexdigest()
+                
+                # Write blob to objects directory
+                obj_dir = f".git/objects/{sha1_hash[:2]}"
+                obj_path = f"{obj_dir}/{sha1_hash[2:]}"
+                if not os.path.exists(obj_dir):
+                    os.makedirs(obj_dir)
+                with open(obj_path, "wb") as f:
+                    f.write(zlib.compress(store))
+                
+                # Tree entry format: <mode> <name>\0<SHA-1>
+                # mode 100644 = regular file
+                # SHA-1 is stored as 20 raw bytes
+                mode = "100644"  # Regular file mode
+                tree_entry = f"{mode} {entry}\0".encode() + bytes.fromhex(sha1_hash)
+                tree_entries.append(tree_entry)
+        
+        # Git requires tree entries to be sorted
+        tree_entries.sort()
+        
+        # Combine all entries into tree content
+        tree_content = b"".join(tree_entries)
+        
+        # Create tree object with format: tree <size>\0<content>
+        header = f"tree {len(tree_content)}\0".encode()
+        store = header + tree_content
+        tree_hash = hashlib.sha1(store).hexdigest()
+        
+        # Store the tree object compressed
+        obj_dir = f".git/objects/{tree_hash[:2]}"
+        obj_path = f"{obj_dir}/{tree_hash[2:]}"
+        if not os.path.exists(obj_dir):
+            os.makedirs(obj_dir)
+        with open(obj_path, "wb") as f:
+            f.write(zlib.compress(store))
+        
+        print(tree_hash)
 
     # Handle unknown commands
     else:
