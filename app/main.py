@@ -111,58 +111,58 @@ def main():
                 print(f"{mode} blob {sha}\t{name}")
 
     elif command == "write-tree":
-        # Tree objects represent directory structure
+        # Initialize an empty list to store tree entries
         tree_entries = []
-        
-        for entry in os.listdir("."):
-            if entry == ".git":
+
+        # Iterate over the files in the current directory
+        for root, dirs, files in os.walk("."):
+            # Skip the .git directory
+            if root.startswith("./.git"):
                 continue
-            
-            if os.path.isfile(entry):
-                # First create blob objects for all files
-                with open(entry, "rb") as f:
+
+            for file_name in files:
+                # Get the relative file path
+                file_path = os.path.join(root, file_name).replace("\\", "/").lstrip("./")
+
+                # Read the file content
+                with open(file_path, "rb") as f:
                     content = f.read()
-                
-                # Create and store blob object
+
+                # Create a blob object for the file
                 header = f"blob {len(content)}\0".encode()
                 store = header + content
                 sha1_hash = hashlib.sha1(store).hexdigest()
-                
-                # Write blob to objects directory
+
+                # Write the blob to the .git/objects directory
                 obj_dir = f".git/objects/{sha1_hash[:2]}"
                 obj_path = f"{obj_dir}/{sha1_hash[2:]}"
                 if not os.path.exists(obj_dir):
                     os.makedirs(obj_dir)
                 with open(obj_path, "wb") as f:
                     f.write(zlib.compress(store))
-                
-                # Tree entry format: <mode> <name>\0<SHA-1>
-                # mode 100644 = regular file
-                # SHA-1 is stored as 20 raw bytes
+
+                # Add the file entry to the tree
                 mode = "100644"  # Regular file mode
-                tree_entry = f"{mode} {entry}\0".encode() + bytes.fromhex(sha1_hash)
-                tree_entries.append(tree_entry)
-        
-        # Git requires tree entries to be sorted
-        tree_entries.sort()
-        
-        # Combine all entries into tree content
+                tree_entries.append(f"{mode} {file_name}\0".encode() + bytes.fromhex(sha1_hash))
+
+        # Combine all tree entries
         tree_content = b"".join(tree_entries)
-        
-        # Create tree object with format: tree <size>\0<content>
+
+        # Create the tree object
         header = f"tree {len(tree_content)}\0".encode()
         store = header + tree_content
-        tree_hash = hashlib.sha1(store).hexdigest()
-        
-        # Store the tree object compressed
-        obj_dir = f".git/objects/{tree_hash[:2]}"
-        obj_path = f"{obj_dir}/{tree_hash[2:]}"
+        sha1_hash = hashlib.sha1(store).hexdigest()
+
+        # Write the tree object to the .git/objects directory
+        obj_dir = f".git/objects/{sha1_hash[:2]}"
+        obj_path = f"{obj_dir}/{sha1_hash[2:]}"
         if not os.path.exists(obj_dir):
             os.makedirs(obj_dir)
         with open(obj_path, "wb") as f:
             f.write(zlib.compress(store))
-        
-        print(tree_hash)
+
+        # Print the SHA-1 hash of the tree object
+        print(sha1_hash)
 
     # Handle unknown commands
     else:
