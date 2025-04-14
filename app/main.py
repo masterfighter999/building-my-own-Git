@@ -2,251 +2,128 @@ import sys
 import os
 import zlib
 import hashlib
+import json
 import time
 from pathlib import Path
-import shutil  # Move this import to the top
+from datetime import datetime
 
-def create_blob_entry(path, write=True):
-    """Create a Git blob object from a file and optionally write it to .git/objects.
+GIT_DIR = ".git"
+OBJECTS_DIR = os.path.join(GIT_DIR, "objects")
+INDEX_FILE = os.path.join(GIT_DIR, "index")
+HEAD_FILE = os.path.join(GIT_DIR, "HEAD")
 
-    Args:
-        path: Path to the file to create blob from
-        write: Whether to write the blob to .git/objects directory
+def init_repository():
+    """Initialize a new Git repository."""
+    os.makedirs(OBJECTS_DIR, exist_ok=True)
+    os.makedirs(os.path.join(GIT_DIR, "refs"), exist_ok=True)
+    with open(HEAD_FILE, "w") as f:
+        f.write("ref: refs/heads/main\n")
+    print("Initialized git directory")
 
-    Returns:
-        SHA-1 hash of the blob
-    """
-    with open(path, "rb") as f:
-        data = f.read()
-        header = f"blob {len(data)}\0".encode("utf-8")
-        store = header + data
-        sha = hashlib.sha1(store).hexdigest()
-        if write:
-            os.makedirs(f".git/objects/{sha[:2]}", exist_ok=True)
-            with open(f".git/objects/{sha[:2]}/{sha[2:]}", "wb") as f:
-                f.write(zlib.compress(store))
-    return sha
-
-def write_tree(path: str):
-    """Create a Git tree object from a directory and write it to .git/objects.
-
-    Args:
-        path: Path to the directory to create tree from
-
-    Returns:
-        SHA-1 hash of the tree
-    """
-    if os.path.isfile(path):
-        return create_blob_entry(path)
-    
-    contents = sorted(
-        os.listdir(path),
-        key=lambda x: x if os.path.isfile(os.path.join(path, x)) else f"{x}/",
-    )
-    s = b""
-    for item in contents:
-        if item == ".git":
-            continue
-        full = os.path.join(path, item)
-        if os.path.isfile(full):
-            s += f"100644 {item}\0".encode()
-        else:
-            s += f"40000 {item}\0".encode()
-        sha1 = int.to_bytes(int(write_tree(full), base=16), length=20, byteorder="big")
-        s += sha1
-    s = f"tree {len(s)}\0".encode() + s
-    sha1 = hashlib.sha1(s).hexdigest()
-    os.makedirs(f".git/objects/{sha1[:2]}", exist_ok=True)
-    with open(f".git/objects/{sha1[:2]}/{sha1[2:]}", "wb") as f:
-        f.write(zlib.compress(s))
+def hash_object(data, obj_type="blob"):
+    """Create a Git object and return its hash."""
+    header = f"{obj_type} {len(data)}\0".encode()
+    store = header + data
+    sha1 = hashlib.sha1(store).hexdigest()
+    path = os.path.join(OBJECTS_DIR, sha1[:2], sha1[2:])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(zlib.compress(store))
     return sha1
 
-def write_object(repo_path: Path, obj_type: str, contents: bytes) -> str:
-    """Write a git object and return its hash.
+def read_object(sha1):
+    """Read a Git object and return its content."""
+    path = os.path.join(OBJECTS_DIR, sha1[:2], sha1[2:])
+    if not os.path.exists(path):
+        raise RuntimeError(f"Object {sha1} not found")
+    with open(path, "rb") as f:
+        raw = zlib.decompress(f.read())
+    header, content = raw.split(b"\0", 1)
+    obj_type, size = header.decode().split()
+    return obj_type, content
 
-    Args:
-        repo_path: Path to git repository
-        obj_type: Object type (commit, tree, blob)
-        contents: Object contents
+def write_tree(path="."):
+    """Create a Git tree object from a directory."""
+    entries = []
+    for entry in sorted(os.scandir(path), key=lambda e: e.name):
+        if entry.name == GIT_DIR:
+            continue
+        full_path = os.path.join(path, entry.name)
+        if entry.is_file():
+            with open(full_path, "rb") as f:
+                sha1 = hash_object(f.read())
+            mode = "100644"
+            entries.append((mode, entry.name, sha1))
+        elif entry.is_dir():
+            sha1 = write_tree(full_path)
+            mode = "40000"
+            entries.append((mode, entry.name, sha1))
+    
+    tree_content = b""
+    for mode, name, sha1 in entries:
+        tree_content += f"{mode} {name}\0".encode() + bytes.fromhex(sha1)
+    return hash_object(tree_content, "tree")
 
-    Returns:
-        SHA-1 hash of the object
-    """
-    header = f"{obj_type} {len(contents)}\0".encode()
-    store = header + contents
-    sha = hashlib.sha1(store).hexdigest()
-    obj_path = repo_path / ".git" / "objects" / sha[:2] / sha[2:]
-    obj_path.parent.mkdir(exist_ok=True)
-    obj_path.write_bytes(zlib.compress(store))
-    return sha
+def commit_tree(tree_sha, message, parent_sha=None):
+    """Create a Git commit object."""
+    author = "Your Name <you@example.com>"
+    timestamp = int(time.time())
+    timezone = "-0500"
 
-def clone_repo(remote_path: str, local_path: str):
-    """
-    Clone a Git repository from a remote .git directory to a local path.
-
-    Args:
-        remote_path: Path to the source Git repository (.git folder)
-        local_path: Path to clone the repository into
-    """
-    # Ensure the remote path ends with /.git if needed
-    remote_git = Path(remote_path).resolve()
-    if not remote_git.name == ".git":
-        remote_git = remote_git / ".git"
-
-    # Define the target path for the cloned repo
-    local_git = Path(local_path) / ".git"
-
-    # Ensure the local path does not already exist
-    if Path(local_path).exists():
-        raise RuntimeError(f"Destination path '{local_path}' already exists.")
-
-    # Ensure the remote .git directory exists
-    if not remote_git.exists():
-        raise RuntimeError(f"Remote Git directory not found: {remote_git}")
-
-    # Create the parent directory for the local repository
-    os.makedirs(local_path, exist_ok=True)
-
-    # Copy the .git directory
-    shutil.copytree(remote_git, local_git)
-
-    # Print success message
-    print(f"Cloned Git repository from {remote_path} to {local_path}")
+    commit_content = []
+    commit_content.append(f"tree {tree_sha}")
+    if parent_sha:
+        commit_content.append(f"parent {parent_sha}")
+    commit_content.append(f"author {author} {timestamp} {timezone}")
+    commit_content.append(f"committer {author} {timestamp} {timezone}")
+    commit_content.append("")
+    commit_content.append(message)
+    
+    return hash_object("\n".join(commit_content).encode(), "commit")
 
 def main():
-    # Debugging logs will appear in the standard error stream
-    print("Logs from your program will appear here!", file=sys.stderr)
-
-    # Get the command from the first argument
     command = sys.argv[1]
 
-    # Handle the "init" command to initialize a Git repository
     if command == "init":
-        # Create necessary directories for a Git repository
-        os.mkdir(".git")
-        os.mkdir(".git/objects")
-        os.mkdir(".git/refs")
-        # Create the HEAD file pointing to the main branch
-        with open(".git/HEAD", "w") as f:
-            f.write("ref: refs/heads/main\n")
-        print("Initialized git directory")
-
-    # Handle the "cat-file" command with the "-p" flag to print the content of a Git object
+        init_repository()
+        
     elif command == "cat-file" and sys.argv[2] == "-p":
-        # Get the object name (SHA-1 hash) from the arguments
-        obj_name = sys.argv[3]
-        # Open the corresponding object file in the .git/objects directory
-        with open(f".git/objects/{obj_name[:2]}/{obj_name[2:]}", "rb") as f:
-            # Decompress the file content
-            raw = zlib.decompress(f.read())
-            # Split the content into header and actual content
-            header, content = raw.split(b"\0", maxsplit=1)
-            # Print the content as a UTF-8 string
-            print(content.decode(encoding="utf-8"), end="")
-
-    # Handle the "hash-object" command with the "-w" flag to create a blob
-    elif command == "hash-object":
-        if sys.argv[2] == "-w":
-            file_path = sys.argv[3]
-            sha1_hash = create_blob_entry(file_path)
-            print(sha1_hash)
+        obj_type, content = read_object(sys.argv[3])
+        if obj_type in ("blob", "commit"):
+            print(content.decode(), end="")
         else:
-            raise RuntimeError(f"Unknown option for hash-object: #{sys.argv[2]}")
-
-    # Add write-tree command handling
+            raise RuntimeError(f"Unsupported object type: {obj_type}")
+            
+    elif command == "hash-object" and sys.argv[2] == "-w":
+        with open(sys.argv[3], "rb") as f:
+            print(hash_object(f.read()))
+            
     elif command == "write-tree":
-        sha1_hash = write_tree(".")
-        print(sha1_hash)
-
-    # Handle the "ls-tree" command to list tree entries
-    elif command == "ls-tree":
-        # Check if we have at least 2 arguments
-        if len(sys.argv) < 3:
-            raise RuntimeError("ls-tree requires a tree hash")
-        # Get parameters and tree hash
-        param = sys.argv[2]
-        tree_hash = sys.argv[3] if param.startswith('--') else sys.argv[2]
-        # Read and decompress the tree object
-        with open(f".git/objects/{tree_hash[:2]}/{tree_hash[2:]}", "rb") as f:
-            data = zlib.decompress(f.read())
-        # Split header and content
-        header, content = data.split(b'\x00', 1)
-        # Verify this is a tree object
-        if not header.startswith(b'tree'):
-            raise RuntimeError(f"Object {tree_hash} is not a tree")
-        # Parse entries based on format
-        i = 0
-        while i < len(content):
-            # Find the space that separates mode from name
-            space_index = content.index(b' ', i)
-            # Find the null byte that separates name from SHA
-            null_index = content.index(b'\x00', space_index)
-            # Extract mode, name and SHA
-            mode = content[i:space_index].decode()
-            name = content[space_index + 1:null_index].decode()
-            sha = content[null_index + 1:null_index + 21].hex()
-            # Move index to next entry
-            i = null_index + 21
-            if param == "--name-only":
-                # Print only the filename
-                print(name)
-            else:
-                # Print full entry: mode type hash name
-                print(f"{mode} blob {sha}\t{name}")
-
-    # Handle the "commit-tree" command to create a commit object
+        print(write_tree())
+        
     elif command == "commit-tree":
-        # Parse arguments
-        if len(sys.argv) < 3:
-            raise RuntimeError("commit-tree requires a tree hash")
         tree_sha = sys.argv[2]
         parent_sha = None
         message = None
-        # Parse optional arguments
+        
         i = 3
         while i < len(sys.argv):
             if sys.argv[i] == "-p":
-                if i + 1 >= len(sys.argv):
-                    raise RuntimeError("-p requires a parent hash")
                 parent_sha = sys.argv[i + 1]
                 i += 2
             elif sys.argv[i] == "-m":
-                if i + 1 >= len(sys.argv):
-                    raise RuntimeError("-m requires a message")
                 message = sys.argv[i + 1]
                 i += 2
             else:
                 i += 1
+                
         if not message:
             message = sys.stdin.read().strip()
-        # Generate timestamp
-        timestamp = int(time.time())
-        timezone = "-0500"  # Example timezone, adjust as needed
-        # Build commit contents
-        contents = []
-        contents.append(f"tree {tree_sha}\n".encode())
-        if parent_sha:
-            contents.append(f"parent {parent_sha}\n".encode())
-        contents.append(f"author Your Name <you@example.com> {timestamp} {timezone}\n".encode())
-        contents.append(f"committer Your Name <you@example.com> {timestamp} {timezone}\n".encode())
-        contents.append(b"\n")
-        contents.append(message.encode())
-        contents.append(b"\n")
-        # Write commit object and print hash
-        hash = write_object(Path("."), "commit", b"".join(contents))
-        print(hash)
-
-    # Handle the "clone" command to clone a repository
-    elif command == "clone":
-        if len(sys.argv) != 4:
-            raise RuntimeError("Usage: clone <remote_path> <local_path>")
-        remote = sys.argv[2]
-        local = sys.argv[3]
-        clone_repo(remote, local)
-
-    # Handle unknown commands
+            
+        print(commit_tree(tree_sha, message, parent_sha))
+        
     else:
-        raise RuntimeError(f"Unknown command #{command}")
+        raise RuntimeError(f"Unknown command {command}")
 
 if __name__ == "__main__":
     main()
