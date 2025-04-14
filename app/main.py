@@ -4,6 +4,7 @@ import zlib
 import hashlib
 import time
 from pathlib import Path
+from typing import Tuple, List
 
 def create_blob_entry(path, write=True):
     """Create a Git blob object from a file and optionally write it to .git/objects."""
@@ -28,43 +29,38 @@ def create_blob_entry(path, write=True):
                 f.write(zlib.compress(store))
     return sha
 
-def write_tree(path: str):
-    """Create a Git tree object from a directory and write it to .git/objects."""
-
-    """
-    Create a tree object from a directory and write it to .git/objects
+def write_tree(path: str) -> str:
+    """Create a Git tree object from a directory.
     
     Args:
-        path: Path to the directory to create tree from
-    
+        path: Path to directory
+        
     Returns:
-        SHA-1 hash of the tree
+        SHA-1 hash of tree object
     """
-
     if os.path.isfile(path):
         return create_blob_entry(path)
     
-    contents = sorted(
-        os.listdir(path),
-        key=lambda x: x if os.path.isfile(os.path.join(path, x)) else f"{x}/",
-    )
-    s = b""
+    entries: List[Tuple[str, str, str]] = []
+    contents = sorted(os.listdir(path))
+    
     for item in contents:
         if item == ".git":
             continue
-        full = os.path.join(path, item)
-        if os.path.isfile(full):
-            s += f"100644 {item}\0".encode()
-        else:
-            s += f"40000 {item}\0".encode()
-        sha1 = int.to_bytes(int(write_tree(full), base=16), length=20, byteorder="big")
-        s += sha1
-    s = f"tree {len(s)}\0".encode() + s
-    sha1 = hashlib.sha1(s).hexdigest()
-    os.makedirs(f".git/objects/{sha1[:2]}", exist_ok=True)
-    with open(f".git/objects/{sha1[:2]}/{sha1[2:]}", "wb") as f:
-        f.write(zlib.compress(s))
-    return sha1
+            
+        full_path = os.path.join(path, item)
+        mode = "100644" if os.path.isfile(full_path) else "40000"
+        name = item
+        sha = write_tree(full_path)
+        entries.append((mode, name, sha))
+        
+    # Build tree content
+    tree_content = b""
+    for mode, name, sha in entries:
+        tree_content += f"{mode} {name}\0".encode()
+        tree_content += bytes.fromhex(sha)
+        
+    return write_object(Path("."), "tree", tree_content)
 
 def write_object(repo_path: Path, obj_type: str, contents: bytes) -> str:
     """Write a git object and return its hash.
@@ -77,19 +73,31 @@ def write_object(repo_path: Path, obj_type: str, contents: bytes) -> str:
     Returns:
         SHA-1 hash of the object
     """
-    # Create header and full content
     header = f"{obj_type} {len(contents)}\0".encode()
     store = header + contents
-    
-    # Calculate hash
     sha = hashlib.sha1(store).hexdigest()
     
-    # Write object file
     obj_path = repo_path / ".git" / "objects" / sha[:2] / sha[2:]
     obj_path.parent.mkdir(exist_ok=True)
     obj_path.write_bytes(zlib.compress(store))
     
     return sha
+
+def read_object(repo_path: Path, sha: str) -> Tuple[str, bytes]:
+    """Read a git object and return its type and contents.
+    
+    Args:
+        repo_path: Path to git repository
+        sha: Object hash
+    
+    Returns:
+        Tuple of (object_type, contents)
+    """
+    with open(f"{repo_path}/.git/objects/{sha[:2]}/{sha[2:]}", "rb") as f:
+        data = zlib.decompress(f.read())
+        header, content = data.split(b"\0", maxsplit=1)
+        obj_type = header.split(b" ")[0].decode()
+        return obj_type, content
 
 def main():
     # Debugging logs will appear in the standard error stream
@@ -225,133 +233,7 @@ def main():
         # Write commit object and print hash
         hash = write_object(Path("."), "commit", b"".join(contents))
         print(hash)
-
-    elif command == "clone":
-        import urllib.request
-        import struct
-
-        if len(sys.argv) < 4:
-            raise RuntimeError("Usage: clone <url> <directory>")
-
-        url = sys.argv[2]
-        dir = sys.argv[3]
-        parent = Path(dir)
-
-        # Initialize repo structure
-        os.makedirs(parent / ".git" / "objects", exist_ok=True)
-        os.makedirs(parent / ".git" / "refs" / "heads", exist_ok=True)
-        with open(parent / ".git" / "HEAD", "w") as f:
-            f.write("ref: refs/heads/main\n")
-
-        # Fetch refs
-        refs_url = f"{url}/info/refs?service=git-upload-pack"
-        with urllib.request.urlopen(refs_url) as f:
-            refs_data = f.read().decode(errors="ignore")
-        # Parse refs (very basic, assumes HEAD is present)
-        lines = [l for l in refs_data.split("\n") if "refs/heads" in l]
-        refs = {}
-        for line in lines:
-            parts = line.strip().split()
-            if len(parts) >= 2:
-                refs[parts[1]] = parts[0]
-        head_sha = refs.get("refs/heads/main") or next(iter(refs.values()))
-
-        # Fetch pack
-        body = (
-            b"0032want " + head_sha.encode() + b"\n"
-            b"00000009done\n"
-        )
-        req = urllib.request.Request(
-            f"{url}/git-upload-pack",
-            data=body,
-            headers={"Content-Type": "application/x-git-upload-pack-request"},
-        )
-        with urllib.request.urlopen(req) as f:
-            pack_bytes = f.read()
-
-        # Find start of packfile (skip pkt-lines)
-        idx = pack_bytes.find(b'PACK')
-        if idx == -1:
-            raise RuntimeError("No packfile found in response")
-        pack_file = pack_bytes[idx:]
-
-        # Parse pack header
-        if pack_file[:4] != b'PACK':
-            raise RuntimeError("Invalid packfile")
-        version = struct.unpack(">I", pack_file[4:8])[0]
-        n_objs = struct.unpack(">I", pack_file[8:12])[0]
-        pack_file = pack_file[12:]
-
-        # Very basic: decompress and write objects (assumes only blobs/trees/commits, no deltas)
-        for _ in range(n_objs):
-            c = pack_file[0]
-            obj_type = (c >> 4) & 0b111
-            size = c & 0b1111
-            i = 1
-            shift = 4
-            while c & 0x80:
-                c = pack_file[i]
-                size |= (c & 0x7f) << shift
-                shift += 7
-                i += 1
-            obj_data = pack_file[i:]
-            decomp = zlib.decompressobj()
-            content = decomp.decompress(obj_data)
-            consumed = len(obj_data) - len(decomp.unused_data)
-            pack_file = pack_file[i + consumed:]
-            if obj_type == 1:
-                ty = "commit"
-            elif obj_type == 2:
-                ty = "tree"
-            elif obj_type == 3:
-                ty = "blob"
-            else:
-                continue  # skip unsupported types
-            # Write object
-            header = f"{ty} {len(content)}\0".encode() + content
-            sha = hashlib.sha1(header).hexdigest()
-            obj_dir = parent / ".git" / "objects" / sha[:2]
-            obj_dir.mkdir(exist_ok=True)
-            with open(obj_dir / sha[2:], "wb") as f:
-                f.write(zlib.compress(header))
-
-        # Checkout files from tree
-        def read_object(parent: Path, sha: str):
-            obj_path = parent / ".git" / "objects" / sha[:2] / sha[2:]
-            with open(obj_path, "rb") as f:
-                raw = zlib.decompress(f.read())
-            header, content = raw.split(b"\0", 1)
-            ty = header.split(b" ")[0].decode()
-            return ty, content
-
-        def checkout_tree(parent: Path, dir: Path, sha: str):
-            dir.mkdir(parents=True, exist_ok=True)
-            ty, content = read_object(parent, sha)
-            if ty != "tree":
-                return
-            i = 0
-            while i < len(content):
-                space = content.index(b" ", i)
-                mode = content[i:space].decode()
-                null = content.index(b"\0", space)
-                name = content[space + 1:null].decode()
-                obj_sha = content[null + 1:null + 21].hex()
-                i = null + 21
-                obj_ty, _ = read_object(parent, obj_sha)
-                if mode == "40000":
-                    checkout_tree(parent, dir / name, obj_sha)
-                else:
-                    _, file_content = read_object(parent, obj_sha)
-                    with open(dir / name, "wb") as f:
-                        f.write(file_content)
-
-        # Find commit and tree
-        commit_ty, commit_content = read_object(parent, head_sha)
-        tree_line = [l for l in commit_content.split(b"\n") if l.startswith(b"tree ")][0]
-        tree_sha = tree_line.split()[1].decode()
-        checkout_tree(parent, parent, tree_sha)
-        print(f"Cloned {url} into {dir}")
-
+        
     # Handle unknown commands
     else:
         raise RuntimeError(f"Unknown command #{command}")
