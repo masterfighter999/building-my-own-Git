@@ -3,9 +3,6 @@ import os
 import zlib
 import hashlib
 import time
-import shutil
-import tarfile
-import urllib.request
 from pathlib import Path
 
 def create_blob_entry(path, write=True):
@@ -93,57 +90,6 @@ def write_object(repo_path: Path, obj_type: str, contents: bytes) -> str:
     obj_path.write_bytes(zlib.compress(store))
     
     return sha
-
-def clone_repository(repo_url: str, dest_dir: str):
-    """Clone a Git repository into the specified directory."""
-    
-    # Convert GitHub HTTPS URL to API URL
-    if repo_url.endswith(".git"):
-        repo_url = repo_url[:-4]
-    
-    if "github.com" in repo_url:
-        # Get repository info from GitHub API
-        api_url = repo_url.replace("github.com", "api.github.com/repos")
-        try:
-            with urllib.request.urlopen(api_url) as response:
-                repo_info = response.read().decode('utf-8')
-                default_branch = "main"  # Use main as default
-                
-            # Create destination directory with Git structure
-            os.makedirs(dest_dir, exist_ok=True)
-            os.makedirs(os.path.join(dest_dir, ".git/objects"), exist_ok=True)
-            os.makedirs(os.path.join(dest_dir, ".git/refs/heads"), exist_ok=True)
-            
-            # Download and extract repository content
-            tarball_url = f"{repo_url}/archive/refs/heads/{default_branch}.tar.gz"
-            tarball_path = os.path.join(dest_dir, "repo.tar.gz")
-            
-            print(f"Downloading repository from {tarball_url}...", file=sys.stderr)
-            urllib.request.urlretrieve(tarball_url, tarball_path)
-            
-            print("Extracting files...", file=sys.stderr)
-            with tarfile.open(tarball_path, "r:gz") as tar:
-                top_level_dir = tar.getnames()[0].split('/')[0]
-                tar.extractall(path=dest_dir)
-            
-            extracted_path = os.path.join(dest_dir, top_level_dir)
-            for item in os.listdir(extracted_path):
-                shutil.move(os.path.join(extracted_path, item), dest_dir)
-            
-            shutil.rmtree(extracted_path)
-            os.remove(tarball_path)
-            
-            with open(os.path.join(dest_dir, ".git/HEAD"), "w") as f:
-                f.write("ref: refs/heads/main\n")
-                
-            print(f"Successfully cloned {repo_url} into {dest_dir}", file=sys.stderr)
-            
-        except Exception as e:
-            if os.path.exists(dest_dir):
-                shutil.rmtree(dest_dir)
-            raise RuntimeError(f"Failed to clone repository: {str(e)}")
-    else:
-        raise RuntimeError("Only GitHub repositories are supported at this time")
 
 def main():
     # Debugging logs will appear in the standard error stream
@@ -279,14 +225,132 @@ def main():
         # Write commit object and print hash
         hash = write_object(Path("."), "commit", b"".join(contents))
         print(hash)
-        
+
     elif command == "clone":
-        if len(sys.argv) != 4:
-            raise RuntimeError("Usage: clone <repo_url> <destination_dir>")
-            
-        repo_url = sys.argv[2]
-        dest_dir = sys.argv[3]
-        clone_repository(repo_url, dest_dir)
+        import urllib.request
+        import struct
+
+        if len(sys.argv) < 4:
+            raise RuntimeError("Usage: clone <url> <directory>")
+
+        url = sys.argv[2]
+        dir = sys.argv[3]
+        parent = Path(dir)
+
+        # Initialize repo structure
+        os.makedirs(parent / ".git" / "objects", exist_ok=True)
+        os.makedirs(parent / ".git" / "refs" / "heads", exist_ok=True)
+        with open(parent / ".git" / "HEAD", "w") as f:
+            f.write("ref: refs/heads/main\n")
+
+        # Fetch refs
+        refs_url = f"{url}/info/refs?service=git-upload-pack"
+        with urllib.request.urlopen(refs_url) as f:
+            refs_data = f.read().decode(errors="ignore")
+        # Parse refs (very basic, assumes HEAD is present)
+        lines = [l for l in refs_data.split("\n") if "refs/heads" in l]
+        refs = {}
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) >= 2:
+                refs[parts[1]] = parts[0]
+        head_sha = refs.get("refs/heads/main") or next(iter(refs.values()))
+
+        # Fetch pack
+        body = (
+            b"0032want " + head_sha.encode() + b"\n"
+            b"00000009done\n"
+        )
+        req = urllib.request.Request(
+            f"{url}/git-upload-pack",
+            data=body,
+            headers={"Content-Type": "application/x-git-upload-pack-request"},
+        )
+        with urllib.request.urlopen(req) as f:
+            pack_bytes = f.read()
+
+        # Find start of packfile (skip pkt-lines)
+        idx = pack_bytes.find(b'PACK')
+        if idx == -1:
+            raise RuntimeError("No packfile found in response")
+        pack_file = pack_bytes[idx:]
+
+        # Parse pack header
+        if pack_file[:4] != b'PACK':
+            raise RuntimeError("Invalid packfile")
+        version = struct.unpack(">I", pack_file[4:8])[0]
+        n_objs = struct.unpack(">I", pack_file[8:12])[0]
+        pack_file = pack_file[12:]
+
+        # Very basic: decompress and write objects (assumes only blobs/trees/commits, no deltas)
+        for _ in range(n_objs):
+            c = pack_file[0]
+            obj_type = (c >> 4) & 0b111
+            size = c & 0b1111
+            i = 1
+            shift = 4
+            while c & 0x80:
+                c = pack_file[i]
+                size |= (c & 0x7f) << shift
+                shift += 7
+                i += 1
+            obj_data = pack_file[i:]
+            decomp = zlib.decompressobj()
+            content = decomp.decompress(obj_data)
+            consumed = len(obj_data) - len(decomp.unused_data)
+            pack_file = pack_file[i + consumed:]
+            if obj_type == 1:
+                ty = "commit"
+            elif obj_type == 2:
+                ty = "tree"
+            elif obj_type == 3:
+                ty = "blob"
+            else:
+                continue  # skip unsupported types
+            # Write object
+            header = f"{ty} {len(content)}\0".encode() + content
+            sha = hashlib.sha1(header).hexdigest()
+            obj_dir = parent / ".git" / "objects" / sha[:2]
+            obj_dir.mkdir(exist_ok=True)
+            with open(obj_dir / sha[2:], "wb") as f:
+                f.write(zlib.compress(header))
+
+        # Checkout files from tree
+        def read_object(parent: Path, sha: str):
+            obj_path = parent / ".git" / "objects" / sha[:2] / sha[2:]
+            with open(obj_path, "rb") as f:
+                raw = zlib.decompress(f.read())
+            header, content = raw.split(b"\0", 1)
+            ty = header.split(b" ")[0].decode()
+            return ty, content
+
+        def checkout_tree(parent: Path, dir: Path, sha: str):
+            dir.mkdir(parents=True, exist_ok=True)
+            ty, content = read_object(parent, sha)
+            if ty != "tree":
+                return
+            i = 0
+            while i < len(content):
+                space = content.index(b" ", i)
+                mode = content[i:space].decode()
+                null = content.index(b"\0", space)
+                name = content[space + 1:null].decode()
+                obj_sha = content[null + 1:null + 21].hex()
+                i = null + 21
+                obj_ty, _ = read_object(parent, obj_sha)
+                if mode == "40000":
+                    checkout_tree(parent, dir / name, obj_sha)
+                else:
+                    _, file_content = read_object(parent, obj_sha)
+                    with open(dir / name, "wb") as f:
+                        f.write(file_content)
+
+        # Find commit and tree
+        commit_ty, commit_content = read_object(parent, head_sha)
+        tree_line = [l for l in commit_content.split(b"\n") if l.startswith(b"tree ")][0]
+        tree_sha = tree_line.split()[1].decode()
+        checkout_tree(parent, parent, tree_sha)
+        print(f"Cloned {url} into {dir}")
 
     # Handle unknown commands
     else:
