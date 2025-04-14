@@ -2,6 +2,8 @@ import sys
 import os
 import zlib
 import hashlib
+from pathlib import Path
+import time
 
 def create_blob_entry(path, write=True):
     """Create a Git blob object from a file and optionally write it to .git/objects."""
@@ -55,7 +57,7 @@ def write_tree(path: str):
             s += f"100644 {item}\0".encode()
         else:
             s += f"40000 {item}\0".encode()
-        sha1 = bytes.fromhex(write_tree(full))  # Corrected line
+        sha1 = int.to_bytes(int(write_tree(full), base=16), length=20, byteorder="big")
         s += sha1
     s = f"tree {len(s)}\0".encode() + s
     sha1 = hashlib.sha1(s).hexdigest()
@@ -64,41 +66,26 @@ def write_tree(path: str):
         f.write(zlib.compress(s))
     return sha1
 
-def commit_tree(tree_hash, parent_hash=None, message=""):
-    """
-    Create a Git commit object and write it to .git/objects.
-
+def hash_contents(contents: bytes, writing: bool = True, cout: bool = True) -> str:
+    """Hash contents and optionally write to git objects directory.
+    
     Args:
-        tree_hash: The SHA-1 hash of the tree object.
-        parent_hash: The SHA-1 hash of the parent commit (optional).
-        message: The commit message.
-
+        contents: Bytes to hash
+        writing: Whether to write to .git/objects
+        cout: Whether to print the hash
+        
     Returns:
-        SHA-1 hash of the commit object.
+        SHA-1 hash of contents
     """
-    # Prepare the commit object content
-    lines = [f"tree {tree_hash}"]
-    if parent_hash:
-        lines.append(f"parent {parent_hash}")
-    lines.append(f"author You <you@example.com> 1234567890 +0000")
-    lines.append(f"committer You <you@example.com> 1234567890 +0000")
-    lines.append("")
-    lines.append(message)
-    content = "\n".join(lines).encode("utf-8")
-
-    # Add the header
-    header = f"commit {len(content)}\0".encode("utf-8")
-    store = header + content
-
-    # Compute the SHA-1 hash
-    sha = hashlib.sha1(store).hexdigest()
-
-    # Write the commit object to .git/objects
-    os.makedirs(f".git/objects/{sha[:2]}", exist_ok=True)
-    with open(f".git/objects/{sha[:2]}/{sha[2:]}", "wb") as f:
-        f.write(zlib.compress(store))
-
-    return sha
+    sha_res = hashlib.sha1(contents).hexdigest()
+    if cout:
+        print(sha_res, end="")
+    if writing:
+        file_path = Path(f".git/objects/{sha_res[:2]}/{sha_res[2:]}")
+        if not file_path.exists():
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_bytes(zlib.compress(contents))
+    return sha_res
 
 def main():
     # Debugging logs will appear in the standard error stream
@@ -189,15 +176,43 @@ def main():
                 print(f"{mode} blob {sha}\t{name}")
 
     elif command == "commit-tree":
-        # Get the tree hash from the arguments
-        tree_hash = sys.argv[2]
-        # Get the parent hash if provided
-        parent_hash = sys.argv[3] if len(sys.argv) > 3 else None
-        # Read the commit message from standard input
-        message = sys.stdin.read().strip()
-        # Create the commit object
-        sha1_hash = commit_tree(tree_hash, parent_hash, message)
-        print(sha1_hash)
+        # Get tree hash
+        if len(sys.argv) < 3:
+            raise RuntimeError("ERROR: commit-tree requires a tree hash")
+        
+        tree_sha = sys.argv[2]
+        parent_sha = None
+        
+        # Parse arguments for parent hash
+        i = 3
+        while i < len(sys.argv):
+            if sys.argv[i] == "-p":
+                if i + 1 >= len(sys.argv):
+                    raise RuntimeError("ERROR: -p requires a parent hash")
+                parent_sha = sys.argv[i + 1]
+                i += 2
+            else:
+                i += 1
+        
+        # Read commit message from stdin
+        msg = sys.stdin.read().strip()
+        
+        # Generate timestamp with timezone
+        timestamp = int(time.time())
+        timezone = time.strftime("%z")
+        
+        # Create commit content
+        content = bytearray()
+        content.extend(f"tree {tree_sha}\n".encode())
+        if parent_sha:
+            content.extend(f"parent {parent_sha}\n".encode())
+        content.extend(f"author Git User <git@user.com> {timestamp} {timezone}\n".encode())
+        content.extend(f"committer Git User <git@user.com> {timestamp} {timezone}\n".encode())
+        content.extend(f"\n{msg}".encode())
+        
+        # Add header and create git object
+        header = f"commit {len(content)}\0".encode()
+        hash_contents(header + content, writing=True, cout=True)
 
     # Handle unknown commands
     else:
