@@ -5,6 +5,16 @@ import hashlib
 
 def create_blob_entry(path, write=True):
     """Create a Git blob object from a file and optionally write it to .git/objects."""
+
+    """   
+    Args:
+        path: Path to the file to create blob from
+        write: Whether to write the blob to .git/objects directory
+    
+    Returns:
+        SHA-1 hash of the blob
+    """
+
     with open(path, "rb") as f:
         data = f.read()
         header = f"blob {len(data)}\0".encode("utf-8")
@@ -18,6 +28,17 @@ def create_blob_entry(path, write=True):
 
 def write_tree(path: str):
     """Create a Git tree object from a directory and write it to .git/objects."""
+
+    """
+    Create a tree object from a directory and write it to .git/objects
+    
+    Args:
+        path: Path to the directory to create tree from
+    
+    Returns:
+        SHA-1 hash of the tree
+    """
+
     if os.path.isfile(path):
         return create_blob_entry(path)
     
@@ -42,6 +63,42 @@ def write_tree(path: str):
     with open(f".git/objects/{sha1[:2]}/{sha1[2:]}", "wb") as f:
         f.write(zlib.compress(s))
     return sha1
+
+def commit_tree(tree_hash, parent_hash=None, message=""):
+    """
+    Create a Git commit object and write it to .git/objects.
+
+    Args:
+        tree_hash: The SHA-1 hash of the tree object.
+        parent_hash: The SHA-1 hash of the parent commit (optional).
+        message: The commit message.
+
+    Returns:
+        SHA-1 hash of the commit object.
+    """
+    # Prepare the commit object content
+    lines = [f"tree {tree_hash}"]
+    if parent_hash:
+        lines.append(f"parent {parent_hash}")
+    lines.append(f"author You <you@example.com> 1234567890 +0000")
+    lines.append(f"committer You <you@example.com> 1234567890 +0000")
+    lines.append("")
+    lines.append(message)
+    content = "\n".join(lines).encode("utf-8")
+
+    # Add the header
+    header = f"commit {len(content)}\0".encode("utf-8")
+    store = header + content
+
+    # Compute the SHA-1 hash
+    sha = hashlib.sha1(store).hexdigest()
+
+    # Write the commit object to .git/objects
+    os.makedirs(f".git/objects/{sha[:2]}", exist_ok=True)
+    with open(f".git/objects/{sha[:2]}/{sha[2:]}", "wb") as f:
+        f.write(zlib.compress(store))
+
+    return sha
 
 def main():
     # Debugging logs will appear in the standard error stream
@@ -130,6 +187,17 @@ def main():
             else:
                 # Print full entry: mode type hash name
                 print(f"{mode} blob {sha}\t{name}")
+
+    elif command == "commit-tree":
+        # Get the tree hash from the arguments
+        tree_hash = sys.argv[2]
+        # Get the parent hash if provided
+        parent_hash = sys.argv[3] if len(sys.argv) > 3 else None
+        # Read the commit message from standard input
+        message = sys.stdin.read().strip()
+        # Create the commit object
+        sha1_hash = commit_tree(tree_hash, parent_hash, message)
+        print(sha1_hash)
 
     # Handle unknown commands
     else:
