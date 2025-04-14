@@ -4,6 +4,7 @@ import zlib
 import hashlib
 import time
 from pathlib import Path
+import shutil  # Move this import to the top
 
 def create_blob_entry(path, write=True):
     """Create a Git blob object from a file and optionally write it to .git/objects.
@@ -87,8 +88,6 @@ def clone_repo(remote_path: str, local_path: str):
         remote_path: Path to the source Git repository (.git folder)
         local_path: Path to clone the repository into
     """
-    import shutil
-
     # Ensure the remote path ends with /.git if needed
     remote_git = Path(remote_path).resolve()
     if not remote_git.name == ".git":
