@@ -3,10 +3,10 @@ import os
 import zlib
 import hashlib
 import time
-from pathlib import Path
+import shutil
+import tarfile
 import urllib.request
-import json
-import re
+from pathlib import Path
 
 def create_blob_entry(path, write=True):
     """Create a Git blob object from a file and optionally write it to .git/objects."""
@@ -94,95 +94,63 @@ def write_object(repo_path: Path, obj_type: str, contents: bytes) -> str:
     
     return sha
 
-def download_object(repo_url: str, obj_hash: str) -> bytes:
-    """Download a Git object from GitHub via HTTP."""
-    url = f"{repo_url}/objects/{obj_hash[:2]}/{obj_hash[2:]}"
-    try:
-        with urllib.request.urlopen(url) as response:
-            return zlib.decompress(response.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            # Try batch API
-            batch_url = f"{repo_url}/objects/info/packs"
-            with urllib.request.urlopen(batch_url) as response:
-                pack_list = response.read().decode().splitlines()
-                for pack in pack_list:
-                    if pack.startswith("P pack-"):
-                        pack_file = pack.split()[1]
-                        pack_url = f"{repo_url}/objects/pack/{pack_file}"
-                        with urllib.request.urlopen(pack_url) as pack_response:
-                            # TODO: Implement pack file parsing
-                            return pack_response.read()
-        raise
-
-def clone_repository(repo_url: str, target_dir: str):
-    """Clone a Git repository from GitHub."""
-    # Convert HTTPS URL to raw git URL
-    if repo_url.startswith("https://github.com"):
-        repo_url = repo_url.replace("https://github.com", "https://raw.githubusercontent.com")
-        if not repo_url.endswith(".git"):
-            repo_url += ".git"
-
-    # Create target directory and .git structure
-    os.makedirs(target_dir)
-    os.chdir(target_dir)
-    os.makedirs(".git/objects", exist_ok=True)
-    os.makedirs(".git/refs/heads", exist_ok=True)
-
-    # Get repo info
-    url = repo_url.replace(".git", "")
-    api_url = f"https://api.github.com/repos/{url.split('githubusercontent.com/')[1]}"
-    with urllib.request.urlopen(api_url) as response:
-        repo_info = json.loads(response.read())
-        default_branch = repo_info.get("default_branch", "main")
-
-    # Get default branch reference
-    ref_url = f"{repo_url}/refs/heads/{default_branch}"
-    with urllib.request.urlopen(ref_url) as response:
-        ref_data = response.read()
-        commit_sha = ref_data.split()[0].decode()
-
-    # Write HEAD
-    with open(".git/HEAD", "w") as f:
-        f.write(f"ref: refs/heads/{default_branch}\n")
-
-    # Write branch reference
-    with open(f".git/refs/heads/{default_branch}", "w") as f:
-        f.write(f"{commit_sha}\n")
-
-    # Download and process commit object
-    commit_data = download_object(repo_url, commit_sha)
-    _, commit_content = commit_data.split(b"\0", 1)
-    tree_sha = re.search(b"tree (.+)\n", commit_content).group(1).decode()
-
-    # Process tree recursively
-    def process_tree(tree_hash):
-        tree_data = download_object(repo_url, tree_hash)
-        _, tree_content = tree_data.split(b"\0", 1)
+def clone_repository(repo_url: str, dest_dir: str):
+    """Clone a Git repository into the specified directory.
+    
+    Args:
+        repo_url: URL of the Git repository
+        dest_dir: Destination directory for the clone
+    """
+    # Convert GitHub HTTPS URL to tarball URL
+    if repo_url.endswith(".git"):
+        repo_url = repo_url[:-4]
+    
+    # Handle GitHub URLs specially
+    if "github.com" in repo_url:
+        tarball_url = f"{repo_url}/archive/refs/heads/main.tar.gz"
         
-        i = 0
-        while i < len(tree_content):
-            space_idx = tree_content.index(b" ", i)
-            null_idx = tree_content.index(b"\0", space_idx)
+        # Create destination directory
+        os.makedirs(dest_dir, exist_ok=True)
+        
+        try:
+            # Download tarball
+            print(f"Downloading repository from {tarball_url}...", file=sys.stderr)
+            tarball_path = os.path.join(dest_dir, "repo.tar.gz")
+            urllib.request.urlretrieve(tarball_url, tarball_path)
             
-            mode = tree_content[i:space_idx].decode()
-            name = tree_content[space_idx + 1:null_idx].decode()
-            sha = tree_content[null_idx + 1:null_idx + 21].hex()
+            # Extract files
+            print("Extracting files...", file=sys.stderr)
+            with tarfile.open(tarball_path, "r:gz") as tar:
+                top_level_dir = tar.getnames()[0].split('/')[0]
+                tar.extractall(path=dest_dir)
             
-            if mode.startswith("100"):  # File
-                blob_data = download_object(repo_url, sha)
-                os.makedirs(os.path.dirname(name), exist_ok=True)
-                with open(name, "wb") as f:
-                    _, content = blob_data.split(b"\0", 1)
-                    f.write(content)
-            elif mode.startswith("40"):  # Directory
-                os.makedirs(name, exist_ok=True)
-                process_tree(sha)
+            # Move contents up one level
+            extracted_path = os.path.join(dest_dir, top_level_dir)
+            for item in os.listdir(extracted_path):
+                shutil.move(os.path.join(extracted_path, item), dest_dir)
+            
+            # Cleanup temporary files
+            shutil.rmtree(extracted_path)
+            os.remove(tarball_path)
+            
+            # Initialize Git repository
+            print("Initializing Git repository...", file=sys.stderr)
+            os.makedirs(os.path.join(dest_dir, ".git/objects"), exist_ok=True)
+            os.makedirs(os.path.join(dest_dir, ".git/refs/heads"), exist_ok=True)
+            
+            # Create HEAD file
+            with open(os.path.join(dest_dir, ".git/HEAD"), "w") as f:
+                f.write("ref: refs/heads/main\n")
                 
-            i = null_idx + 21
-
-    # Start processing from root tree
-    process_tree(tree_sha)
+            print(f"Successfully cloned {repo_url} into {dest_dir}", file=sys.stderr)
+            
+        except Exception as e:
+            # Cleanup on error
+            if os.path.exists(dest_dir):
+                shutil.rmtree(dest_dir)
+            raise RuntimeError(f"Failed to clone repository: {str(e)}")
+    else:
+        raise RuntimeError("Only GitHub repositories are supported at this time")
 
 def main():
     # Debugging logs will appear in the standard error stream
@@ -320,11 +288,12 @@ def main():
         print(hash)
         
     elif command == "clone":
-        if len(sys.argv) < 4:
-            raise RuntimeError("clone requires a URL and target directory")
+        if len(sys.argv) != 4:
+            raise RuntimeError("Usage: clone <repo_url> <destination_dir>")
+            
         repo_url = sys.argv[2]
-        target_dir = sys.argv[3]
-        clone_repository(repo_url, target_dir)
+        dest_dir = sys.argv[3]
+        clone_repository(repo_url, dest_dir)
 
     # Handle unknown commands
     else:
