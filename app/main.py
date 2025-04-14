@@ -100,15 +100,17 @@ def clone_repo(remote_path: str, local_path: str):
     if Path(local_path).exists():
         raise RuntimeError(f"Destination path '{local_path}' already exists.")
 
-    # Copy .git directory
+    # Ensure the remote .git directory exists
     if not remote_git.exists():
         raise RuntimeError(f"Remote Git directory not found: {remote_git}")
-    
-    shutil.copytree(remote_git, local_git)
 
-    # Optionally create a working directory with checked-out files
+    # Create the parent directory for the local repository
     os.makedirs(local_path, exist_ok=True)
 
+    # Copy the .git directory
+    shutil.copytree(remote_git, local_git)
+
+    # Print success message
     print(f"Cloned Git repository from {remote_path} to {local_path}")
 
 def main():
