@@ -95,57 +95,50 @@ def write_object(repo_path: Path, obj_type: str, contents: bytes) -> str:
     return sha
 
 def clone_repository(repo_url: str, dest_dir: str):
-    """Clone a Git repository into the specified directory.
+    """Clone a Git repository into the specified directory."""
     
-    Args:
-        repo_url: URL of the Git repository
-        dest_dir: Destination directory for the clone
-    """
-    # Convert GitHub HTTPS URL to tarball URL
+    # Convert GitHub HTTPS URL to API URL
     if repo_url.endswith(".git"):
         repo_url = repo_url[:-4]
     
-    # Handle GitHub URLs specially
     if "github.com" in repo_url:
-        tarball_url = f"{repo_url}/archive/refs/heads/main.tar.gz"
-        
-        # Create destination directory
-        os.makedirs(dest_dir, exist_ok=True)
-        
+        # Get repository info from GitHub API
+        api_url = repo_url.replace("github.com", "api.github.com/repos")
         try:
-            # Download tarball
-            print(f"Downloading repository from {tarball_url}...", file=sys.stderr)
+            with urllib.request.urlopen(api_url) as response:
+                repo_info = response.read().decode('utf-8')
+                default_branch = "main"  # Use main as default
+                
+            # Create destination directory with Git structure
+            os.makedirs(dest_dir, exist_ok=True)
+            os.makedirs(os.path.join(dest_dir, ".git/objects"), exist_ok=True)
+            os.makedirs(os.path.join(dest_dir, ".git/refs/heads"), exist_ok=True)
+            
+            # Download and extract repository content
+            tarball_url = f"{repo_url}/archive/refs/heads/{default_branch}.tar.gz"
             tarball_path = os.path.join(dest_dir, "repo.tar.gz")
+            
+            print(f"Downloading repository from {tarball_url}...", file=sys.stderr)
             urllib.request.urlretrieve(tarball_url, tarball_path)
             
-            # Extract files
             print("Extracting files...", file=sys.stderr)
             with tarfile.open(tarball_path, "r:gz") as tar:
                 top_level_dir = tar.getnames()[0].split('/')[0]
                 tar.extractall(path=dest_dir)
             
-            # Move contents up one level
             extracted_path = os.path.join(dest_dir, top_level_dir)
             for item in os.listdir(extracted_path):
                 shutil.move(os.path.join(extracted_path, item), dest_dir)
             
-            # Cleanup temporary files
             shutil.rmtree(extracted_path)
             os.remove(tarball_path)
             
-            # Initialize Git repository
-            print("Initializing Git repository...", file=sys.stderr)
-            os.makedirs(os.path.join(dest_dir, ".git/objects"), exist_ok=True)
-            os.makedirs(os.path.join(dest_dir, ".git/refs/heads"), exist_ok=True)
-            
-            # Create HEAD file
             with open(os.path.join(dest_dir, ".git/HEAD"), "w") as f:
                 f.write("ref: refs/heads/main\n")
                 
             print(f"Successfully cloned {repo_url} into {dest_dir}", file=sys.stderr)
             
         except Exception as e:
-            # Cleanup on error
             if os.path.exists(dest_dir):
                 shutil.rmtree(dest_dir)
             raise RuntimeError(f"Failed to clone repository: {str(e)}")
