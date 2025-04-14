@@ -2,8 +2,8 @@ import sys
 import os
 import zlib
 import hashlib
-from pathlib import Path
 import time
+from pathlib import Path
 
 def create_blob_entry(path, write=True):
     """Create a Git blob object from a file and optionally write it to .git/objects."""
@@ -66,26 +66,30 @@ def write_tree(path: str):
         f.write(zlib.compress(s))
     return sha1
 
-def hash_contents(contents: bytes, writing: bool = True, cout: bool = True) -> str:
-    """Hash contents and optionally write to git objects directory.
+def write_object(repo_path: Path, obj_type: str, contents: bytes) -> str:
+    """Write a git object and return its hash.
     
     Args:
-        contents: Bytes to hash
-        writing: Whether to write to .git/objects
-        cout: Whether to print the hash
+        repo_path: Path to git repository
+        obj_type: Object type (commit, tree, blob)
+        contents: Object contents
         
     Returns:
-        SHA-1 hash of contents
+        SHA-1 hash of the object
     """
-    sha_res = hashlib.sha1(contents).hexdigest()
-    if cout:
-        print(sha_res, end="")
-    if writing:
-        file_path = Path(f".git/objects/{sha_res[:2]}/{sha_res[2:]}")
-        if not file_path.exists():
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_bytes(zlib.compress(contents))
-    return sha_res
+    # Create header and full content
+    header = f"{obj_type} {len(contents)}\0".encode()
+    store = header + contents
+    
+    # Calculate hash
+    sha = hashlib.sha1(store).hexdigest()
+    
+    # Write object file
+    obj_path = repo_path / ".git" / "objects" / sha[:2] / sha[2:]
+    obj_path.parent.mkdir(exist_ok=True)
+    obj_path.write_bytes(zlib.compress(store))
+    
+    return sha
 
 def main():
     # Debugging logs will appear in the standard error stream
@@ -176,44 +180,52 @@ def main():
                 print(f"{mode} blob {sha}\t{name}")
 
     elif command == "commit-tree":
-        # Get tree hash
+        # Parse arguments
         if len(sys.argv) < 3:
-            raise RuntimeError("ERROR: commit-tree requires a tree hash")
-        
+            raise RuntimeError("commit-tree requires a tree hash")
+            
         tree_sha = sys.argv[2]
         parent_sha = None
+        message = None
         
-        # Parse arguments for parent hash
+        # Parse optional arguments
         i = 3
         while i < len(sys.argv):
             if sys.argv[i] == "-p":
                 if i + 1 >= len(sys.argv):
-                    raise RuntimeError("ERROR: -p requires a parent hash")
+                    raise RuntimeError("-p requires a parent hash")
                 parent_sha = sys.argv[i + 1]
+                i += 2
+            elif sys.argv[i] == "-m":
+                if i + 1 >= len(sys.argv):
+                    raise RuntimeError("-m requires a message")
+                message = sys.argv[i + 1]
                 i += 2
             else:
                 i += 1
-        
-        # Read commit message from stdin
-        msg = sys.stdin.read().strip()
-        
-        # Generate timestamp with timezone
+                
+        if not message:
+            message = sys.stdin.read().strip()
+            
+        # Generate timestamp
         timestamp = int(time.time())
-        timezone = time.strftime("%z")
+        timezone = "-0500"  # Example timezone, adjust as needed
         
-        # Create commit content
-        content = bytearray()
-        content.extend(f"tree {tree_sha}\n".encode())
+        # Build commit contents
+        contents = []
+        contents.append(f"tree {tree_sha}\n".encode())
         if parent_sha:
-            content.extend(f"parent {parent_sha}\n".encode())
-        content.extend(f"author Git User <git@user.com> {timestamp} {timezone}\n".encode())
-        content.extend(f"committer Git User <git@user.com> {timestamp} {timezone}\n".encode())
-        content.extend(f"\n{msg}".encode())
+            contents.append(f"parent {parent_sha}\n".encode())
+        contents.append(f"author Your Name <you@example.com> {timestamp} {timezone}\n".encode())
+        contents.append(f"committer Your Name <you@example.com> {timestamp} {timezone}\n".encode())
+        contents.append(b"\n")
+        contents.append(message.encode())
+        contents.append(b"\n")
         
-        # Add header and create git object
-        header = f"commit {len(content)}\0".encode()
-        hash_contents(header + content, writing=True, cout=True)
-
+        # Write commit object and print hash
+        hash = write_object(Path("."), "commit", b"".join(contents))
+        print(hash)
+        
     # Handle unknown commands
     else:
         raise RuntimeError(f"Unknown command #{command}")
