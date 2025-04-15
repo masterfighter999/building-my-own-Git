@@ -83,7 +83,9 @@ def commit_tree(tree_sha, message, parent_sha=None):
     lines.append(f"committer {author} {timestamp} {timezone}")
     lines.append("")
     lines.append(message)
-    return hash_object("\n".join(lines).encode(), "commit")
+    # Add trailing newline to match Git's format
+    commit_content = "\n".join(lines) + "\n"
+    return hash_object(commit_content.encode(), "commit")
 
 
 def encode_sneaky_number(num):
