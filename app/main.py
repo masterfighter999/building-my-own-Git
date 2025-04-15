@@ -5,6 +5,7 @@ import hashlib
 import json
 import time
 import urllib.request
+import urllib.error
 from pathlib import Path
 from datetime import datetime
 
@@ -83,35 +84,35 @@ def commit_tree(tree_sha, message, parent_sha=None):
     return hash_object("\n".join(commit_content).encode(), "commit")
 
 def clone_repository(url):
-    """Clone a Git repository from the given URL."""
+    if not url.endswith(".git"):
+        print("Invalid git URL", file=sys.stderr)
+        sys.exit(1)
 
-    # Check if remote repository exists
     try:
-        req = urllib.request.Request(url)
+        info_refs_url = f"{url}/info/refs?service=git-upload-pack"
+        req = urllib.request.Request(info_refs_url)
         with urllib.request.urlopen(req) as response:
             if response.status != 200:
-                raise RuntimeError("repository does not exist")
-    except Exception:
+                raise Exception("Invalid response from server")
+
+    except urllib.error.HTTPError as e:
+        print("repository does not exist", file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as e:
         print("repository does not exist", file=sys.stderr)
         sys.exit(1)
 
-    # Determine the repository name from the URL
-    repo_name = url.split('/')[-1]
-    if repo_name.endswith('.git'):
+    repo_name = url.split("/")[-1]
+    if repo_name.endswith(".git"):
         repo_name = repo_name[:-4]
 
-    # Create the repository folder
     os.makedirs(repo_name, exist_ok=True)
 
-    # Initialize the repository in the new folder
     git_dir = os.path.join(repo_name, ".git")
-    objects_dir = os.path.join(git_dir, "objects")
-    refs_dir = os.path.join(git_dir, "refs")
-    head_file = os.path.join(git_dir, "HEAD")
+    os.makedirs(os.path.join(git_dir, "objects"), exist_ok=True)
+    os.makedirs(os.path.join(git_dir, "refs"), exist_ok=True)
 
-    os.makedirs(objects_dir, exist_ok=True)
-    os.makedirs(refs_dir, exist_ok=True)
-    with open(head_file, "w") as f:
+    with open(os.path.join(git_dir, "HEAD"), "w") as f:
         f.write("ref: refs/heads/main\n")
 
     print("Initialized git directory")
