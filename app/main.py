@@ -416,7 +416,8 @@ def render_tree(repo_path: str, dir_path: str, sha: str):
 
 def ls_tree(sha1, name_only=False):
     """List the contents of a tree object."""
-    obj_type, content = read_object(sha1)
+    # Use current directory as the repository path
+    obj_type, content = read_object(".", sha1)
     if obj_type != "tree":
         raise RuntimeError(f"Object {sha1} is not a tree")
     
