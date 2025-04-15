@@ -89,19 +89,21 @@ def clone_repository(url):
         sys.exit(1)
 
     try:
-        # Test if the repository exists by accessing Git smart HTTP endpoint
         info_refs_url = f"{url.rstrip('/')}/info/refs?service=git-upload-pack"
         req = urllib.request.Request(info_refs_url)
         with urllib.request.urlopen(req) as response:
             if response.status != 200:
                 raise Exception("Invalid response from server")
+        body = response.read()
+        with open("debug_info_refs.txt", "wb") as f:
+            f.write(body)
+    except urllib.error.HTTPError as e:
+        print("repository does not exist", file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print("repository does not exist", file=sys.stderr)
+        sys.exit(1)
 
-    except urllib.error.HTTPError:
-        print("repository does not exist", file=sys.stderr)
-        sys.exit(1)
-    except urllib.error.URLError:
-        print("repository does not exist", file=sys.stderr)
-        sys.exit(1)
 
     # Extract repo name from URL
     repo_name = url.rstrip("/").split("/")[-1]
