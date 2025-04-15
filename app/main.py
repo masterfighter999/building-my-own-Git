@@ -6,6 +6,9 @@ import json
 import time
 from pathlib import Path
 from datetime import datetime
+import urllib.request
+import urllib.parse
+import re
 
 GIT_DIR = ".git"
 OBJECTS_DIR = os.path.join(GIT_DIR, "objects")
@@ -81,6 +84,48 @@ def commit_tree(tree_sha, message, parent_sha=None):
     
     return hash_object("\n".join(commit_content).encode(), "commit")
 
+def clone_repository(url):
+    """Clone a Git repository from the given URL."""
+    # Parse repository URL
+    parsed_url = urllib.parse.urlparse(url)
+    repo_path = parsed_url.path.strip('/')
+    
+    # Create directory for the repository
+    repo_name = repo_path.split('/')[-1]
+    if repo_name.endswith('.git'):
+        repo_name = repo_name[:-4]
+    
+    os.makedirs(repo_name, exist_ok=True)
+    os.chdir(repo_name)
+    
+    # Initialize repository
+    init_repository()
+    
+    # Download repository data
+    info_url = f"{url}/info/refs?service=git-upload-pack"
+    try:
+        with urllib.request.urlopen(info_url) as response:
+            refs_data = response.read().decode('utf-8')
+            
+        # Parse refs data and get main branch HEAD
+        refs = {}
+        for line in refs_data.split('\n'):
+            if not line.strip():
+                continue
+            match = re.match(r'^([0-9a-f]{40}) refs/heads/(.+)$', line.strip())
+            if match:
+                sha, ref = match.groups()
+                refs[ref] = sha
+                
+        # Use master or main branch
+        head_sha = refs.get('master') or refs.get('main')
+        if not head_sha:
+            raise RuntimeError("Could not find master or main branch")
+            
+        print(f"Cloning into '{repo_name}'...")
+    except Exception as e:
+        raise RuntimeError(f"Failed to clone repository: {str(e)}")
+
 def main():
     command = sys.argv[1]
 
@@ -121,6 +166,11 @@ def main():
             message = sys.stdin.read().strip()
             
         print(commit_tree(tree_sha, message, parent_sha))
+        
+    elif command == "clone":
+        if len(sys.argv) < 3:
+            raise RuntimeError("clone command requires a URL")
+        clone_repository(sys.argv[2])
         
     else:
         raise RuntimeError(f"Unknown command {command}")
