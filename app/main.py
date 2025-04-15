@@ -414,6 +414,30 @@ def render_tree(repo_path: str, dir_path: str, sha: str):
         else:
             raise RuntimeError(f"Unsupported mode: {mode}")
 
+def ls_tree(sha1, name_only=False):
+    """List the contents of a tree object."""
+    obj_type, content = read_object(sha1)
+    if obj_type != "tree":
+        raise RuntimeError(f"Object {sha1} is not a tree")
+    
+    while content:
+        # Find the space and null byte separating mode, name, and SHA-1
+        space_index = content.index(b' ')
+        null_index = content.index(b'\0', space_index)
+        
+        # Extract mode, name, and SHA-1
+        mode = content[:space_index].decode()
+        name = content[space_index + 1:null_index].decode()
+        sha = content[null_index + 1:null_index + 21].hex()
+        
+        # Print the entry
+        if name_only:
+            print(name)
+        else:
+            print(f"{mode} blob {sha}\t{name}")
+            
+        # Move to next entry
+        content = content[null_index + 21:]
 
 def main():
     """Main entry point for the program."""
@@ -454,6 +478,12 @@ def main():
 
     elif command == "clone":
         clone()
+
+    elif command == "ls-tree":
+        if len(sys.argv) < 3:
+            raise RuntimeError("ls-tree requires a tree hash")
+        name_only = len(sys.argv) > 3 and sys.argv[3] == "--name-only"
+        ls_tree(sys.argv[2], name_only)
 
     else:
         raise RuntimeError(f"Unknown command {command}")
