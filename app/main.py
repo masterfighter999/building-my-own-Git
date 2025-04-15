@@ -60,7 +60,6 @@ def write_tree(path="."):
             entries.append((mode, entry.name, sha1))
     
     tree_content = b""
-    # Fixed the loop header by removing the stray text.
     for mode, name, sha1 in entries:
         tree_content += f"{mode} {name}\0".encode() + bytes.fromhex(sha1)
     return hash_object(tree_content, "tree")
@@ -81,6 +80,21 @@ def commit_tree(tree_sha, message, parent_sha=None):
     commit_content.append(message)
     
     return hash_object("\n".join(commit_content).encode(), "commit")
+
+def clone_repository(url):
+    """Clone a Git repository from the given URL.
+    
+    This is a simple implementation that only prints the URL.
+    Extend this function to fully clone the repository.
+    """
+    # For now, simply create a folder and initialize a repository.
+    repo_name = url.split('/')[-1]
+    if repo_name.endswith('.git'):
+        repo_name = repo_name[:-4]
+    os.makedirs(repo_name, exist_ok=True)
+    os.chdir(repo_name)
+    init_repository()
+    print(f"Cloned repository from {url} into {repo_name}")
 
 def main():
     command = sys.argv[1]
@@ -122,6 +136,11 @@ def main():
             message = sys.stdin.read().strip()
             
         print(commit_tree(tree_sha, message, parent_sha))
+        
+    elif command == "clone":
+        if len(sys.argv) < 3:
+            raise RuntimeError("clone command requires a repository URL")
+        clone_repository(sys.argv[2])
         
     else:
         raise RuntimeError(f"Unknown command {command}")
