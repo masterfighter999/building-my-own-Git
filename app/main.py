@@ -91,19 +91,21 @@ def clone_repository(url):
     repo_name = url.split('/')[-1]
     if repo_name.endswith('.git'):
         repo_name = repo_name[:-4]
-    
+
     # Create the repository folder
     os.makedirs(repo_name, exist_ok=True)
-    
-    # Save the current working directory
-    current_dir = os.getcwd()
-    
-    # Change into the repository folder, initialize repository,
-    # then return to the parent directory so that the folder remains visible.
-    os.chdir(repo_name)
-    init_repository()
-    os.chdir(current_dir)
-    
+
+    # Initialize the repository in the new folder, without changing directories
+    git_dir = os.path.join(repo_name, ".git")
+    objects_dir = os.path.join(git_dir, "objects")
+    refs_dir = os.path.join(git_dir, "refs")
+    head_file = os.path.join(git_dir, "HEAD")
+
+    os.makedirs(objects_dir, exist_ok=True)
+    os.makedirs(refs_dir, exist_ok=True)
+    with open(head_file, "w") as f:
+        f.write("ref: refs/heads/main\n")
+    print("Initialized git directory")
     print(f"Cloned repository from {url} into {repo_name}")
 
 def main():
