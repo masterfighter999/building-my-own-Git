@@ -73,7 +73,6 @@ def commit_tree(tree_sha, message, parent_sha=None):
 
     return hash_object("\n".join(lines).encode(), "commit")
 
-# Sneaky Git Number Encoding (Git Packfile Encoding)
 def encode_sneaky_number(num):
     """Encodes a number into Git's sneaky encoding format"""
     result = bytearray()
@@ -151,12 +150,6 @@ def clone_repository(url):
         with open(os.path.join(repo_name, ".git/HEAD"), "w") as f:
             f.write("ref: refs/heads/main\n")
 
-        # Fetch raw pack file manually
-        pack_url = f"{url.rstrip('/')}/objects/pack/pack-*.pack"
-        # You can simulate pack download using wget or requests if URLs are known
-        # For now, just create dummy pack for decoding
-        # decode_packfile("packfile.pack")
-
         print("Initialized git directory")
         print(f"Cloned repository from {url} into {repo_name}")
     except Exception as e:
@@ -169,11 +162,11 @@ def main():
     if command == "init":
         init_repository()
 
-    elif command == "cat-file" and sys.argv[2] == "-p":
+    elif command == "cat-file" and sys.argv[2] == "p":
         obj_type, content = read_object(sys.argv[3])
         print(content.decode(), end="")
 
-    elif command == "hash-object" and sys.argv[2] == "-w":
+    elif command == "hash-object" and sys.argv[2] == "w":
         with open(sys.argv[3], "rb") as f:
             print(hash_object(f.read()))
 
@@ -187,10 +180,10 @@ def main():
 
         i = 3
         while i < len(sys.argv):
-            if sys.argv[i] == "-p":
+            if sys.argv[i] == "p":
                 parent_sha = sys.argv[i + 1]
                 i += 2
-            elif sys.argv[i] == "-m":
+            elif sys.argv[i] == "m":
                 message = sys.argv[i + 1]
                 i += 2
             else:
