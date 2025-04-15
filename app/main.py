@@ -4,6 +4,7 @@ import zlib
 import hashlib
 import json
 import time
+import urllib.request
 from pathlib import Path
 from datetime import datetime
 
@@ -82,12 +83,19 @@ def commit_tree(tree_sha, message, parent_sha=None):
     return hash_object("\n".join(commit_content).encode(), "commit")
 
 def clone_repository(url):
-    """Clone a Git repository from the given URL.
-    
-    This is a simple implementation that only creates a new folder and initializes a repository.
-    Extend this function to fully clone the repository.
-    """
-    # Determine the repository name from the URL.
+    """Clone a Git repository from the given URL."""
+
+    # Check if remote repository exists
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as response:
+            if response.status != 200:
+                raise RuntimeError("repository does not exist")
+    except Exception:
+        print("repository does not exist", file=sys.stderr)
+        sys.exit(1)
+
+    # Determine the repository name from the URL
     repo_name = url.split('/')[-1]
     if repo_name.endswith('.git'):
         repo_name = repo_name[:-4]
@@ -95,7 +103,7 @@ def clone_repository(url):
     # Create the repository folder
     os.makedirs(repo_name, exist_ok=True)
 
-    # Initialize the repository in the new folder, without changing directories
+    # Initialize the repository in the new folder
     git_dir = os.path.join(repo_name, ".git")
     objects_dir = os.path.join(git_dir, "objects")
     refs_dir = os.path.join(git_dir, "refs")
@@ -105,6 +113,7 @@ def clone_repository(url):
     os.makedirs(refs_dir, exist_ok=True)
     with open(head_file, "w") as f:
         f.write("ref: refs/heads/main\n")
+
     print("Initialized git directory")
     print(f"Cloned repository from {url} into {repo_name}")
 
