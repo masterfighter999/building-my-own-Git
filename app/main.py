@@ -11,12 +11,14 @@ GIT_DIR = ".git"
 OBJECTS_DIR = os.path.join(GIT_DIR, "objects")
 HEAD_FILE = os.path.join(GIT_DIR, "HEAD")
 
+
 def init_repository():
     os.makedirs(os.path.join(GIT_DIR, "refs"), exist_ok=True)
     os.makedirs(OBJECTS_DIR, exist_ok=True)
     with open(HEAD_FILE, "w") as f:
         f.write("ref: refs/heads/main\n")
     print("Initialized git directory")
+
 
 def hash_object(data, obj_type="blob"):
     header = f"{obj_type} {len(data)}\0".encode()
@@ -28,6 +30,7 @@ def hash_object(data, obj_type="blob"):
         f.write(zlib.compress(store))
     return sha1
 
+
 def read_object(sha1):
     path = os.path.join(OBJECTS_DIR, sha1[:2], sha1[2:])
     with open(path, "rb") as f:
@@ -35,6 +38,7 @@ def read_object(sha1):
     header, content = raw.split(b'\0', 1)
     obj_type, size = header.decode().split()
     return obj_type, content
+
 
 def write_tree(path="."):
     entries = []
@@ -56,6 +60,7 @@ def write_tree(path="."):
         result += f"{mode} {name}\0".encode() + bytes.fromhex(sha1)
     return hash_object(result, "tree")
 
+
 def commit_tree(tree_sha, message, parent_sha=None):
     author = "Your Name <you@example.com>"
     timestamp = int(time.time())
@@ -73,6 +78,8 @@ def commit_tree(tree_sha, message, parent_sha=None):
 
     return hash_object("\n".join(lines).encode(), "commit")
 
+
+# Sneaky Git Number Encoding (Git Packfile Encoding)
 def encode_sneaky_number(num):
     """Encodes a number into Git's sneaky encoding format"""
     result = bytearray()
@@ -81,6 +88,7 @@ def encode_sneaky_number(num):
         num >>= 7
     result.append(num & 0x7f)
     return bytes(result)
+
 
 def decode_sneaky_number(encoded_bytes):
     """Decodes a Git sneaky number into the original integer value"""
@@ -92,6 +100,7 @@ def decode_sneaky_number(encoded_bytes):
             break
         shift += 7
     return result
+
 
 def decode_packfile(filename):
     with open(filename, "rb") as f:
@@ -124,6 +133,7 @@ def decode_packfile(filename):
             else:
                 print(f"Skipping unsupported object type {obj_type}")
 
+
 def read_compressed_data(f):
     data = b""
     decompress = zlib.decompressobj()
@@ -136,6 +146,7 @@ def read_compressed_data(f):
             f.seek(-len(decompress.unused_data), 1)
             break
     return data
+
 
 def clone_repository(url):
     if not url.startswith("http://") and not url.startswith("https://"):
@@ -150,11 +161,14 @@ def clone_repository(url):
         with open(os.path.join(repo_name, ".git/HEAD"), "w") as f:
             f.write("ref: refs/heads/main\n")
 
-        print("Initialized git directory")
-        print(f"Cloned repository from {url} into {repo_name}")
+        # Simulating pack file download
+        pack_url = f"{url.rstrip('/')}/objects/pack/pack-*.pack"
+        # Here, you'd download and save the pack file for decoding
+        print("Cloned repository from", url)
     except Exception as e:
-        print("repository does not exist", file=sys.stderr)
+        print(f"Error cloning repository: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 def main():
     command = sys.argv[1]
@@ -162,11 +176,11 @@ def main():
     if command == "init":
         init_repository()
 
-    elif command == "cat-file" and sys.argv[2] == "p":
+    elif command == "cat-file" and sys.argv[2] == "-p":
         obj_type, content = read_object(sys.argv[3])
         print(content.decode(), end="")
 
-    elif command == "hash-object" and sys.argv[2] == "w":
+    elif command == "hash-object" and sys.argv[2] == "-w":
         with open(sys.argv[3], "rb") as f:
             print(hash_object(f.read()))
 
@@ -180,10 +194,10 @@ def main():
 
         i = 3
         while i < len(sys.argv):
-            if sys.argv[i] == "p":
+            if sys.argv[i] == "-p":
                 parent_sha = sys.argv[i + 1]
                 i += 2
-            elif sys.argv[i] == "m":
+            elif sys.argv[i] == "-m":
                 message = sys.argv[i + 1]
                 i += 2
             else:
@@ -200,6 +214,7 @@ def main():
 
     else:
         raise RuntimeError(f"Unknown command {command}")
+
 
 if __name__ == "__main__":
     main()
