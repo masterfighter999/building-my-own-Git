@@ -84,25 +84,27 @@ def commit_tree(tree_sha, message, parent_sha=None):
     return hash_object("\n".join(commit_content).encode(), "commit")
 
 def clone_repository(url):
-    if not url.endswith(".git"):
+    if not (url.startswith("http://") or url.startswith("https://")):
         print("Invalid git URL", file=sys.stderr)
         sys.exit(1)
 
     try:
-        info_refs_url = f"{url}/info/refs?service=git-upload-pack"
+        # Test if the repository exists by accessing Git smart HTTP endpoint
+        info_refs_url = f"{url.rstrip('/')}/info/refs?service=git-upload-pack"
         req = urllib.request.Request(info_refs_url)
         with urllib.request.urlopen(req) as response:
             if response.status != 200:
                 raise Exception("Invalid response from server")
 
-    except urllib.error.HTTPError as e:
+    except urllib.error.HTTPError:
         print("repository does not exist", file=sys.stderr)
         sys.exit(1)
-    except urllib.error.URLError as e:
+    except urllib.error.URLError:
         print("repository does not exist", file=sys.stderr)
         sys.exit(1)
 
-    repo_name = url.split("/")[-1]
+    # Extract repo name from URL
+    repo_name = url.rstrip("/").split("/")[-1]
     if repo_name.endswith(".git"):
         repo_name = repo_name[:-4]
 
@@ -117,6 +119,7 @@ def clone_repository(url):
 
     print("Initialized git directory")
     print(f"Cloned repository from {url} into {repo_name}")
+
 
 def main():
     command = sys.argv[1]
