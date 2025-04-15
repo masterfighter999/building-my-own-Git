@@ -7,20 +7,24 @@ import time
 import urllib.request
 import urllib.error
 
+
 GIT_DIR = ".git"
 OBJECTS_DIR = os.path.join(GIT_DIR, "objects")
 HEAD_FILE = os.path.join(GIT_DIR, "HEAD")
+PACK_DIR = os.path.join(GIT_DIR, "objects", "pack")
 
 
 def init_repository():
-    os.makedirs(os.path.join(GIT_DIR, "refs"), exist_ok=True)
+    os.makedirs(os.path.join(GIT_DIR, "refs", "heads"), exist_ok=True)
     os.makedirs(OBJECTS_DIR, exist_ok=True)
+    os.makedirs(PACK_DIR, exist_ok=True)
     with open(HEAD_FILE, "w") as f:
         f.write("ref: refs/heads/main\n")
     print("Initialized git directory")
 
 
 def hash_object(data, obj_type="blob"):
+    """Hashes the object data, compresses it, and stores it in the objects directory."""
     header = f"{obj_type} {len(data)}\0".encode()
     store = header + data
     sha1 = hashlib.sha1(store).hexdigest()
@@ -32,6 +36,7 @@ def hash_object(data, obj_type="blob"):
 
 
 def read_object(sha1):
+    """Reads and decompresses an object from the objects directory."""
     path = os.path.join(OBJECTS_DIR, sha1[:2], sha1[2:])
     with open(path, "rb") as f:
         raw = zlib.decompress(f.read())
@@ -41,6 +46,7 @@ def read_object(sha1):
 
 
 def write_tree(path="."):
+    """Writes a tree object representing the directory structure at path."""
     entries = []
     for entry in sorted(os.scandir(path), key=lambda e: e.name):
         if entry.name == GIT_DIR:
@@ -62,6 +68,7 @@ def write_tree(path="."):
 
 
 def commit_tree(tree_sha, message, parent_sha=None):
+    """Creates a commit object."""
     author = "Your Name <you@example.com>"
     timestamp = int(time.time())
     timezone = "-0000"
@@ -79,9 +86,8 @@ def commit_tree(tree_sha, message, parent_sha=None):
     return hash_object("\n".join(lines).encode(), "commit")
 
 
-# Sneaky Git Number Encoding (Git Packfile Encoding)
 def encode_sneaky_number(num):
-    """Encodes a number into Git's sneaky encoding format"""
+    """Encodes a number into Git's sneaky encoding format."""
     result = bytearray()
     while num >= 0x80:
         result.append((num & 0x7f) | 0x80)
@@ -91,7 +97,7 @@ def encode_sneaky_number(num):
 
 
 def decode_sneaky_number(encoded_bytes):
-    """Decodes a Git sneaky number into the original integer value"""
+    """Decodes a Git sneaky number into the original integer value."""
     result = 0
     shift = 0
     for byte in encoded_bytes:
@@ -103,6 +109,7 @@ def decode_sneaky_number(encoded_bytes):
 
 
 def decode_packfile(filename):
+    """Decodes a Git packfile and handles the objects."""
     with open(filename, "rb") as f:
         header = f.read(4)
         if header != b'PACK':
@@ -135,6 +142,7 @@ def decode_packfile(filename):
 
 
 def read_compressed_data(f):
+    """Reads and decompresses the object data from a packfile."""
     data = b""
     decompress = zlib.decompressobj()
     while True:
@@ -149,6 +157,7 @@ def read_compressed_data(f):
 
 
 def clone_repository(url):
+    """Simulates the cloning of a Git repository."""
     if not url.startswith("http://") and not url.startswith("https://"):
         print("Invalid git URL", file=sys.stderr)
         sys.exit(1)
@@ -161,16 +170,17 @@ def clone_repository(url):
         with open(os.path.join(repo_name, ".git/HEAD"), "w") as f:
             f.write("ref: refs/heads/main\n")
 
-        # Simulating pack file download
+        # Simulate downloading pack file
         pack_url = f"{url.rstrip('/')}/objects/pack/pack-*.pack"
-        # Here, you'd download and save the pack file for decoding
         print("Cloned repository from", url)
+        # Here you would download and save the pack file for decoding
     except Exception as e:
         print(f"Error cloning repository: {e}", file=sys.stderr)
         sys.exit(1)
 
 
 def main():
+    """Main entry point for the program."""
     command = sys.argv[1]
 
     if command == "init":
