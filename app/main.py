@@ -7,6 +7,7 @@ import time
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse
+from typing import List, Tuple, Dict
 
 
 GIT_DIR = ".git"
