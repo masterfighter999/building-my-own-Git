@@ -84,16 +84,26 @@ def commit_tree(tree_sha, message, parent_sha=None):
 def clone_repository(url):
     """Clone a Git repository from the given URL.
     
-    This is a simple implementation that only prints the URL.
+    This is a simple implementation that only creates a new folder and initializes a repository.
     Extend this function to fully clone the repository.
     """
-    # For now, simply create a folder and initialize a repository.
+    # Determine the repository name from the URL.
     repo_name = url.split('/')[-1]
     if repo_name.endswith('.git'):
         repo_name = repo_name[:-4]
+    
+    # Create the repository folder
     os.makedirs(repo_name, exist_ok=True)
+    
+    # Save the current working directory
+    current_dir = os.getcwd()
+    
+    # Change into the repository folder, initialize repository,
+    # then return to the parent directory so that the folder remains visible.
     os.chdir(repo_name)
     init_repository()
+    os.chdir(current_dir)
+    
     print(f"Cloned repository from {url} into {repo_name}")
 
 def main():
