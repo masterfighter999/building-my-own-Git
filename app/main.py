@@ -481,10 +481,26 @@ def main():
         clone()
 
     elif command == "ls-tree":
+        # Check minimum arguments
         if len(sys.argv) < 3:
             raise RuntimeError("ls-tree requires a tree hash")
-        name_only = len(sys.argv) > 3 and sys.argv[3] == "--name-only"
-        ls_tree(sys.argv[2], name_only)
+            
+        # Parse arguments properly
+        tree_hash = None
+        name_only = False
+        
+        # Check each argument
+        for arg in sys.argv[2:]:
+            if arg == "--name-only":
+                name_only = True
+            elif not tree_hash:  # First non-flag argument is the tree hash
+                tree_hash = arg
+                
+        # Verify we got a tree hash
+        if not tree_hash:
+            raise RuntimeError("ls-tree requires a tree hash")
+            
+        ls_tree(tree_hash, name_only)
 
     else:
         raise RuntimeError(f"Unknown command {command}")
