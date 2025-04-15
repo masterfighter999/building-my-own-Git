@@ -7,7 +7,6 @@ import time
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse
-from typing import List, Tuple, Dict
 
 
 GIT_DIR = ".git"
@@ -84,7 +83,6 @@ def commit_tree(tree_sha, message, parent_sha=None):
     lines.append(f"committer {author} {timestamp} {timezone}")
     lines.append("")
     lines.append(message)
-
     return hash_object("\n".join(lines).encode(), "commit")
 
 
