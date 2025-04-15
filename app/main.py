@@ -448,7 +448,7 @@ def main():
         init_repository()
 
     elif command == "cat-file" and sys.argv[2] == "-p":
-        obj_type, content = read_object(sys.argv[3])
+        obj_type, content = read_object(".", sys.argv[3])  # Add "." as the path argument
         print(content.decode(), end="")
 
     elif command == "hash-object" and sys.argv[2] == "-w":
